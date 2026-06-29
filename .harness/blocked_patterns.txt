@@ -1,0 +1,4 @@
+.harness/*
+pyproject.toml
+*.env
+.git/*

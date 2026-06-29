@@ -1,0 +1,33 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "coding-agent-harness"
+version = "0.1.0"
+description = "A small harness-engineering demonstration for coding agents."
+requires-python = ">=3.11"
+dependencies = [
+  "langgraph>=0.2",
+  "langchain>=0.3",
+  "langchain-openai",
+  "langchain-anthropic",
+  "python-dotenv",
+  "structlog",
+  "rich",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8",
+]
+
+[project.scripts]
+coding-agent-harness = "main:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/agent", "src/harness"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
