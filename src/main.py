@@ -20,6 +20,7 @@ from rich.table import Table
 
 from agent.graph import build_graph, initial_state, visualize_graph
 from agent.tools import write_file
+from harness.log_query import get_events
 from harness.observability import HarnessObserver, configure_logging
 from harness.state import AgentState
 
@@ -181,13 +182,7 @@ def _print_log_tail(console: Console, log_path: Path) -> None:
         console.print("No harness log file found.")
         return
 
-    lines = log_path.read_text(encoding="utf-8").splitlines()[-10:]
-    for line in lines:
-        try:
-            record = json.loads(line)
-        except json.JSONDecodeError:
-            table.add_row("unparsed", "", line[:120])
-            continue
+    for record in get_events(log_path, limit=10):
         event = str(record.get("event", ""))
         logger = str(record.get("logger", ""))
         summary = {

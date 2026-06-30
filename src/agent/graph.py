@@ -18,6 +18,7 @@ from agent.nodes import (
     make_verify_node,
     plan_node,
     planner_node,
+    reset_circuit_breaker,
     verify_node,
 )
 from harness.state import AgentState
@@ -60,8 +61,6 @@ def route_from_start(state: AgentState) -> str:
 
 
 def route_after_guard(state: AgentState) -> str:
-    if state.get("harness_route") == "end":
-        return END
     if state.get("output") == "budget_exceeded":
         return END
     if str(state.get("output", "")).startswith("CIRCUIT_OPEN"):
@@ -110,6 +109,7 @@ def build_graph(
     executor: Executor | None = None,
     verifier: Verifier | None = None,
 ) -> CompiledCodingGraph:
+    reset_circuit_breaker()
     graph = StateGraph(AgentState)
     agent_runnable = make_execute_node(executor) if executor is not None else agent_node
     verify_runnable = make_verify_node(verifier) if verifier is not None else verify_node
@@ -143,5 +143,6 @@ def visualize_graph() -> None:
             "  -> agent_node\n"
             "  -> verify_node\n"
             "  -> feedback_injector_node -> harness_guard_node\n"
+            "  -> fail_node\n"
             "  -> END"
         )

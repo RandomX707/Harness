@@ -168,7 +168,7 @@ def run_tests(test_path: str = "tests/") -> str:
             cwd=PROJECT_ROOT,
             capture_output=True,
             text=True,
-            timeout=30,
+            timeout=60,
             check=False,
         )
         output = completed.stdout + completed.stderr

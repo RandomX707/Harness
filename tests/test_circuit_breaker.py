@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from harness.circuit_breaker import CircuitBreaker, CircuitOpenError
+from harness.circuit_breaker import CircuitBreaker, CircuitOpenError, CircuitState
 from harness.state import AgentState
 
 
@@ -91,3 +91,74 @@ def test_is_tripped_returns_false_when_no_condition_matches() -> None:
 
     assert breaker.is_tripped(state) is False
     assert state["harness_events"] == []
+
+
+def test_circuit_transitions_to_half_open_after_cooldown() -> None:
+    state = make_state()
+    state["verification"]["failures"] = ["boom", "boom", "boom", "boom"]
+    state["iterations"] = 4
+    breaker = CircuitBreaker(max_same_error=3, cooldown_iterations=5)
+
+    is_open, _ = breaker.check(state)
+    assert is_open is True
+    assert breaker.state == CircuitState.OPEN
+
+    state["iterations"] = 9
+    is_open, reason = breaker.check(state)
+
+    assert is_open is False
+    assert reason == ""
+    assert breaker.state == CircuitState.HALF_OPEN
+
+
+def test_half_open_trial_success_closes_circuit() -> None:
+    state = make_state()
+    breaker = CircuitBreaker(cooldown_iterations=1)
+    breaker.state = CircuitState.OPEN
+    breaker.opened_at_iteration = 1
+    state["iterations"] = 2
+    breaker.check(state)
+
+    breaker.record_trial_success(state)
+
+    assert breaker.state == CircuitState.CLOSED
+    assert breaker.failure_count == 0
+    assert breaker.opened_at_iteration is None
+
+
+def test_half_open_trial_failure_reopens_circuit_with_extended_cooldown() -> None:
+    state = make_state()
+    breaker = CircuitBreaker(cooldown_iterations=5)
+    breaker.state = CircuitState.OPEN
+    breaker.opened_at_iteration = 1
+    state["iterations"] = 6
+    breaker.check(state)
+
+    state["iterations"] = 7
+    breaker.record_trial_failure(state)
+
+    assert breaker.state == CircuitState.OPEN
+    assert breaker.opened_at_iteration == 7
+    state["iterations"] = 11
+    is_open, _ = breaker.check(state)
+    assert is_open is True
+
+
+def test_state_transitions_are_logged_to_harness_events() -> None:
+    state = make_state()
+    state["verification"]["failures"] = ["boom", "boom", "boom", "boom"]
+    state["iterations"] = 4
+    breaker = CircuitBreaker(max_same_error=3, cooldown_iterations=1)
+
+    breaker.check(state)
+    state["iterations"] = 5
+    breaker.check(state)
+    breaker.record_trial_success(state)
+
+    transitions = [
+        event
+        for event in state["harness_events"]
+        if event.get("type") == "circuit_breaker_state_change"
+    ]
+    assert [event["old_state"] for event in transitions] == ["closed", "open", "half_open"]
+    assert [event["new_state"] for event in transitions] == ["open", "half_open", "closed"]

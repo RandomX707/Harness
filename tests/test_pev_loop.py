@@ -1,20 +1,22 @@
 from __future__ import annotations
 
 import pytest
+from langchain_core.messages import AIMessage
 
 from harness.state import AgentState
+from harness.pricing import calculate_cost
 from agent.graph import build_graph, initial_state
 from agent.tools import write_file
 
 
-def test_plan_execute_verify_retries_until_success() -> None:
+def test_plan_execute_verify_retries_until_success(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("LITELLM_API_KEY", raising=False)
     verification_results = iter([(False, "first failure"), (False, "second failure"), (True, "ok")])
 
     def executor(state: AgentState) -> AgentState:
         return {
             **state,
             "messages": state.get("messages", []) + ["executor ran"],
-            "current_action": "verify",
         }
 
     def verifier(state: AgentState) -> tuple[bool, str]:
@@ -28,7 +30,9 @@ def test_plan_execute_verify_retries_until_success() -> None:
     assert result["last_error"] == ""
 
 
-def test_plan_execute_verify_stops_after_three_failures() -> None:
+def test_plan_execute_verify_stops_after_three_failures(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("LITELLM_API_KEY", raising=False)
+
     def verifier(state: AgentState) -> tuple[bool, str]:
         return False, "still failing"
 
@@ -96,9 +100,42 @@ def test_circuit_breaker_fires(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_budget_enforcement(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("LITELLM_API_KEY", raising=False)
     state = initial_state("tiny budget task")
-    state["budget"] = {"tokens_used": 0, "tokens_max": 100, "cost_usd": 0.0, "max_attempts": 3}
+    state["budget"] = {"tokens_used": 100, "tokens_max": 100, "cost_usd": 0.0, "max_attempts": 3}
 
     app = build_graph()
     result = app.invoke(state)
 
     assert result["output"] == "budget_exceeded"
+
+
+def test_budget_uses_real_usage_when_available(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LITELLM_API_KEY", "test-key")
+    monkeypatch.setenv("LITELLM_BASE_URL", "https://example.com/v1")
+
+    class FakeReactAgent:
+        def invoke(self, payload):
+            return {
+                "messages": [
+                    AIMessage(
+                        content="done",
+                        usage_metadata={
+                            "input_tokens": 1000,
+                            "output_tokens": 500,
+                            "total_tokens": 1500,
+                        },
+                    )
+                ]
+            }
+
+    monkeypatch.setattr("agent.nodes.create_react_agent", lambda *args, **kwargs: FakeReactAgent())
+
+    def verifier(state: AgentState) -> tuple[bool, str]:
+        return True, "exit_code=0\n1 passed"
+
+    state = initial_state("usage tracking")
+    state["plan"] = ["single step"]
+    app = build_graph(verifier=verifier)
+    result = app.invoke(state)
+
+    assert result["budget"]["tokens_used"] == 1500
+    assert result["budget"]["cost_usd"] == pytest.approx(calculate_cost("gpt-4o-mini", 1000, 500))

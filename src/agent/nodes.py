@@ -11,9 +11,10 @@ from typing import Any, cast
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langgraph.prebuilt import create_react_agent
 
-from harness.circuit_breaker import CircuitBreaker
+from harness.circuit_breaker import CircuitBreaker, CircuitState
 from harness.context_manager import HarnessContextManager
 from harness.observability import HarnessObserver, traced_node
+from harness.pricing import calculate_cost
 from harness.state import AgentState
 
 from agent.tools import TOOLS, bind_tool_state, run_tests
@@ -22,6 +23,8 @@ from agent.tools import TOOLS, bind_tool_state, run_tests
 Executor = Callable[[AgentState], AgentState]
 Verifier = Callable[[AgentState], tuple[bool, str]]
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+MODEL_NAME = "gpt-4o-mini"
+DEFAULT_CIRCUIT_BREAKER = CircuitBreaker()
 
 
 @traced_node("plan")
@@ -80,6 +83,7 @@ def make_verify_node(verifier: Verifier | None = None) -> Executor:
         failures = list(verification.get("failures", []))
         if not passed:
             failures.append(output)
+        _record_trial_result(state, passed)
         messages = state.get("messages", []) + [f"Verification attempt {attempts}: {passed}"]
         if not passed and attempts >= 3:
             messages.append("Stopped after repeated verification failures.")
@@ -109,35 +113,30 @@ def fail_node(state: AgentState) -> AgentState:
 
 @traced_node("harness_guard")
 def harness_guard_node(state: AgentState) -> AgentState:
-    budget = dict(state.get("budget", {}))
-    tokens_used = int(budget.get("tokens_used", 0)) + _estimate_iteration_tokens(state)
-    budget["tokens_used"] = tokens_used
     updated: dict[str, Any] = {
         **state,
         "iterations": int(state.get("iterations", 0)) + 1,
-        "budget": budget,
     }
     guarded_state = cast(AgentState, updated)
 
-    is_open, reason = CircuitBreaker().check(guarded_state)
+    is_open, reason = DEFAULT_CIRCUIT_BREAKER.check(guarded_state)
     HarnessContextManager().inject_harness_context(guarded_state)
     if is_open:
         updated["output"] = f"CIRCUIT_OPEN: {reason}"
-        updated["harness_route"] = "end"
         HarnessObserver().log_circuit_breaker("open", reason, 0)
         return cast(AgentState, updated)
 
+    budget = guarded_state.get("budget", {})
     tokens_max = int(budget.get("tokens_max", 0))
+    tokens_used = int(budget.get("tokens_used", 0))
     if tokens_max > 0 and tokens_used >= tokens_max:
         updated["output"] = "budget_exceeded"
-        updated["harness_route"] = "end"
         return cast(AgentState, updated)
 
     context_manager = HarnessContextManager()
     if context_manager.should_compact(guarded_state):
         updated["messages"] = context_manager.compact_messages(guarded_state)
 
-    updated["harness_route"] = "agent"
     HarnessObserver().log_iteration(cast(AgentState, updated))
     return cast(AgentState, updated)
 
@@ -158,7 +157,7 @@ def planner_node(state: AgentState) -> AgentState:
             from langchain_openai import ChatOpenAI
 
             model = ChatOpenAI(
-                model="gpt-4o-mini",
+                model=MODEL_NAME,
                 api_key=api_key,
                 base_url=os.getenv("LITELLM_BASE_URL"),
             )
@@ -183,7 +182,8 @@ def planner_node(state: AgentState) -> AgentState:
 @traced_node("agent")
 def agent_node(state: AgentState) -> AgentState:
     if not os.getenv("LITELLM_API_KEY"):
-        return default_executor(state)
+        next_state = default_executor(state)
+        return _record_estimated_usage(next_state)
 
     context_manager = HarnessContextManager(PROJECT_ROOT)
     instructions = context_manager.load_agent_instructions()
@@ -195,7 +195,7 @@ def agent_node(state: AgentState) -> AgentState:
         from langchain_openai import ChatOpenAI
 
         model = ChatOpenAI(
-            model="gpt-4o-mini",
+            model=MODEL_NAME,
             api_key=os.getenv("LITELLM_API_KEY"),
             base_url=os.getenv("LITELLM_BASE_URL"),
         )
@@ -210,14 +210,19 @@ def agent_node(state: AgentState) -> AgentState:
             bind_tool_state(None)
         response_messages = result.get("messages", []) if isinstance(result, dict) else []
         last_message = response_messages[-1] if response_messages else AIMessage(content="")
+        next_state = _record_llm_usage(
+            state,
+            getattr(last_message, "usage_metadata", None),
+        )
         return {
-            **state,
-            "messages": state.get("messages", []) + [last_message],
+            **next_state,
+            "messages": next_state.get("messages", []) + [last_message],
         }
     except Exception as exc:
+        next_state = _record_estimated_usage(state)
         return {
-            **state,
-            "messages": state.get("messages", []) + [AIMessage(content=f"agent_error: {exc}")],
+            **next_state,
+            "messages": next_state.get("messages", []) + [AIMessage(content=f"agent_error: {exc}")],
         }
 
 
@@ -233,6 +238,7 @@ def verify_node(state: AgentState) -> AgentState:
     messages = list(state.get("messages", []))
 
     if passed:
+        _record_trial_result(state, True)
         task_complete = current_step >= max(len(plan) - 1, 0)
         if not task_complete:
             current_step += 1
@@ -255,6 +261,7 @@ def verify_node(state: AgentState) -> AgentState:
         return cast(AgentState, next_state)
 
     attempts += 1
+    _record_trial_result(state, False)
     failure_summary = _summarize_failure(output)
     failures.append(failure_summary)
     verification = {
@@ -341,3 +348,48 @@ def _estimate_iteration_tokens(state: AgentState) -> int:
         ]
     )
     return max(128, len(text) // 4)
+
+
+def reset_circuit_breaker() -> None:
+    global DEFAULT_CIRCUIT_BREAKER
+    DEFAULT_CIRCUIT_BREAKER = CircuitBreaker()
+
+
+def _record_trial_result(state: AgentState, passed: bool) -> None:
+    if DEFAULT_CIRCUIT_BREAKER.state != CircuitState.HALF_OPEN:
+        return
+    if passed:
+        DEFAULT_CIRCUIT_BREAKER.record_trial_success(state)
+    else:
+        DEFAULT_CIRCUIT_BREAKER.record_trial_failure(state)
+
+
+def _record_llm_usage(state: AgentState, usage_metadata: Any) -> AgentState:
+    if not usage_metadata:
+        return _record_estimated_usage(state)
+
+    input_tokens = int(usage_metadata.get("input_tokens", 0))
+    output_tokens = int(usage_metadata.get("output_tokens", 0))
+    total_tokens = int(usage_metadata.get("total_tokens", input_tokens + output_tokens))
+    budget = dict(state.get("budget", {}))
+    budget["tokens_used"] = int(budget.get("tokens_used", 0)) + total_tokens
+    budget["cost_usd"] = float(budget.get("cost_usd", 0.0)) + calculate_cost(
+        MODEL_NAME,
+        input_tokens,
+        output_tokens,
+    )
+    return {**state, "budget": budget}
+
+
+def _record_estimated_usage(state: AgentState) -> AgentState:
+    budget = dict(state.get("budget", {}))
+    estimated_tokens = _estimate_iteration_tokens(state)
+    budget["tokens_used"] = int(budget.get("tokens_used", 0)) + estimated_tokens
+    events = state.get("harness_events", []) + [
+        {
+            "type": "token_usage",
+            "source": "estimated, not measured",
+            "tokens": estimated_tokens,
+        }
+    ]
+    return {**state, "budget": budget, "harness_events": events}

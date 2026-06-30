@@ -6,7 +6,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from harness.circuit_breaker import CircuitBreaker
 from harness.state import AgentState
 
 
@@ -42,8 +41,7 @@ class HarnessContextManager:
         tokens_max = int(budget.get("tokens_max", 0))
         tokens_remaining = max(tokens_max - tokens_used, 0)
         edited_files = sorted(state.get("file_edits", {}).keys())
-        is_open, reason = CircuitBreaker().check(state)
-        warning = reason if is_open else "none"
+        warning = self._latest_circuit_breaker_warning(state)
 
         return "\n".join(
             [
@@ -94,6 +92,12 @@ class HarnessContextManager:
             content = str(getattr(message, "content", message))
         lowered = content.lower()
         return any(marker in lowered for marker in ["error", "exception", "traceback", "failed"])
+
+    def _latest_circuit_breaker_warning(self, state: AgentState) -> str:
+        for event in reversed(state.get("harness_events", [])):
+            if event.get("type") == "circuit_breaker":
+                return str(event.get("condition", "open"))
+        return "none"
 
 
 ContextManager = HarnessContextManager

@@ -15,6 +15,7 @@ from rich.console import Console
 from rich.table import Table
 import structlog
 
+from harness.schema_guard import SchemaViolationError, validate_node_output
 from harness.state import AgentState
 
 
@@ -192,6 +193,11 @@ def traced_node(name: str) -> Callable[[F], F]:
                 HarnessObserver("agent.nodes").log_iteration(cast(AgentState, state))
             started = perf_counter()
             result = func(*args, **kwargs)
+            try:
+                validate_node_output(name, result)
+            except SchemaViolationError as exc:
+                logger.error("schema_violation", error=str(exc))
+                raise
             logger.info("node_finish", elapsed_ms=round((perf_counter() - started) * 1000, 3))
             return result
 
