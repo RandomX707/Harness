@@ -120,3 +120,19 @@ def test_custom_network_policy_can_be_registered(tmp_path: Path) -> None:
 
     assert allowed is True
     assert reason == "allowed"
+
+
+def test_async_approval_denies_on_timeout(tmp_path: Path) -> None:
+    resolver = PermissionResolver(
+        [
+            ToolPolicy("run_terminal", RiskLevel.DESTRUCTIVE, None, True),
+        ],
+        project_root=tmp_path,
+        use_async_approval=True,
+        approval_timeout=0.01,
+    )
+
+    allowed, reason = resolver.check("run_terminal", {"command": "rm -rf build"})
+
+    assert allowed is False
+    assert "timed out" in reason

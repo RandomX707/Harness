@@ -9,6 +9,7 @@ import sys
 
 from langchain_core.tools import tool
 
+from agent.reviewer import review_changes
 from harness.observability import HarnessObserver
 from harness.permission_resolver import PermissionResolver
 from harness.state import AgentState
@@ -177,10 +178,46 @@ def run_tests(test_path: str = "tests/") -> str:
         return _truncate(f"error running tests: {exc}", 3000)
 
 
+@tool
+def request_review(reason: str) -> str:
+    """Ask the read-only reviewer subagent to inspect current file edits."""
+
+    args = {"reason": reason}
+    _check_permission("request_review", args)
+    state = _ACTIVE_STATE or {
+        "messages": [],
+        "plan": [],
+        "current_step": 0,
+        "iterations": 0,
+        "file_edits": {},
+        "verification": {"passed": False, "failures": [], "attempts": 0},
+        "budget": {"tokens_used": 0, "tokens_max": 0, "cost_usd": 0.0},
+        "harness_events": [],
+        "task": reason,
+        "output": "",
+    }
+    result = review_changes(state)
+    concerns = result.get("concerns", [])
+    concern_text = "; ".join(str(concern) for concern in concerns) or "none"
+    return (
+        f"review approved={result.get('approved')}\n"
+        f"summary={result.get('summary')}\n"
+        f"concerns={concern_text}"
+    )
+
+
 read_file_tool = read_file
 write_file_tool = write_file
 run_code_tool = run_code
 list_files_tool = list_files
 run_tests_tool = run_tests
+request_review_tool = request_review
 
-TOOLS = [read_file_tool, write_file_tool, run_code_tool, list_files_tool, run_tests_tool]
+TOOLS = [
+    read_file_tool,
+    write_file_tool,
+    run_code_tool,
+    list_files_tool,
+    run_tests_tool,
+    request_review_tool,
+]

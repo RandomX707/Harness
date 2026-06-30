@@ -5,6 +5,7 @@ from langchain_core.messages import AIMessage
 
 from harness.state import AgentState
 from harness.pricing import calculate_cost
+from harness.inferential_verifier import InferentialVerificationResult
 from agent.graph import build_graph, initial_state
 from agent.tools import write_file
 
@@ -139,3 +140,30 @@ def test_budget_uses_real_usage_when_available(monkeypatch: pytest.MonkeyPatch) 
 
     assert result["budget"]["tokens_used"] == 1500
     assert result["budget"]["cost_usd"] == pytest.approx(calculate_cost("gpt-4o-mini", 1000, 500))
+
+
+def test_inferential_verification_does_not_block_passing_task(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("LITELLM_API_KEY", raising=False)
+
+    class FakeRunTests:
+        def invoke(self, args):
+            return "exit_code=0\n1 passed"
+
+    monkeypatch.setattr("agent.nodes.run_tests", FakeRunTests())
+    monkeypatch.setattr(
+        "agent.nodes.judge_code_quality",
+        lambda plan_step, diff_summary: InferentialVerificationResult(
+            score=0.2,
+            reasoning="quality concern",
+            flagged_issues=["soft warning"],
+        ),
+    )
+
+    state = initial_state("soft inferential warning")
+    state["plan"] = ["single step"]
+    app = build_graph()
+    result = app.invoke(state)
+
+    assert result["verification"]["passed"] is True
+    assert result["done"] is True
+    assert result["verification"]["inferential"]["passed"] is False

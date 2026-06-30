@@ -111,6 +111,9 @@ class HarnessObserver:
     def log_verification(self, passed: bool, failures: list[str], attempt: int) -> None:
         self.logger.info("verification", passed=passed, failures=failures, attempt=attempt)
 
+    def log_inferential_verification(self, result: dict) -> None:
+        self.logger.info("inferential_verification", **result)
+
     def log_circuit_breaker(self, condition: str, value: object, threshold: int) -> None:
         self.logger.info(
             "circuit_breaker_trip",

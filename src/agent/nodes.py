@@ -13,6 +13,7 @@ from langgraph.prebuilt import create_react_agent
 
 from harness.circuit_breaker import CircuitBreaker, CircuitState
 from harness.context_manager import HarnessContextManager
+from harness.inferential_verifier import judge_code_quality
 from harness.observability import HarnessObserver, traced_node
 from harness.pricing import calculate_cost
 from harness.state import AgentState
@@ -238,6 +239,11 @@ def verify_node(state: AgentState) -> AgentState:
     messages = list(state.get("messages", []))
 
     if passed:
+        inferential = judge_code_quality(
+            _current_step_text(state),
+            _diff_summary(state),
+        ).as_dict()
+        HarnessObserver().log_inferential_verification(inferential)
         _record_trial_result(state, True)
         task_complete = current_step >= max(len(plan) - 1, 0)
         if not task_complete:
@@ -247,6 +253,7 @@ def verify_node(state: AgentState) -> AgentState:
             "failures": failures,
             "attempts": attempts,
             "task_complete": task_complete,
+            "inferential": inferential,
         }
         next_state: dict[str, Any] = {
             **state,
@@ -269,6 +276,7 @@ def verify_node(state: AgentState) -> AgentState:
         "failures": failures,
         "attempts": attempts,
         "task_complete": False,
+        "inferential": verification.get("inferential", {}),
     }
     next_state = {
         **state,
@@ -337,6 +345,13 @@ def _summarize_failure(output: str) -> str:
         if "failed" in lowered or "error" in lowered or "exit_code=" in lowered:
             return line[:500]
     return output[:500]
+
+
+def _diff_summary(state: AgentState) -> str:
+    edits = state.get("file_edits", {})
+    if not edits:
+        return "No file edits recorded."
+    return "\n".join(f"{path}: {count} edit(s)" for path, count in sorted(edits.items()))
 
 
 def _estimate_iteration_tokens(state: AgentState) -> int:

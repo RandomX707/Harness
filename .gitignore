@@ -18,6 +18,9 @@ build/
 logs/*.jsonl
 logs/*.log
 
+# Harness runtime state
+.harness/approvals.json
+
 # Editor
 .vscode/
 .idea/

@@ -86,6 +86,33 @@ class CompiledCodingGraph:
     def get_graph(self) -> Any:
         return self._graph.get_graph()
 
+    def to_mermaid(self) -> str:
+        return "\n".join(
+            [
+                "graph TD",
+                "    START((START))",
+                "    END((END))",
+                "    plan[plan]",
+                "    planner[planner]",
+                "    harness_guard[harness_guard]",
+                "    agent[agent]",
+                "    verify[verify]",
+                "    feedback_injector[feedback_injector]",
+                "    fail[fail]",
+                "    START -->|route_from_start: plan empty| planner",
+                "    START -->|route_from_start: plan exists| harness_guard",
+                "    planner --> harness_guard",
+                "    harness_guard -->|route_after_guard: continue| agent",
+                "    harness_guard -->|route_after_guard: stop| END",
+                "    agent --> verify",
+                "    verify -->|route_after_verify: passed complete| END",
+                "    verify -->|route_after_verify: failed max attempts| END",
+                "    verify -->|route_after_verify: passed more steps| harness_guard",
+                "    verify -->|route_after_verify: failed retry| feedback_injector",
+                "    feedback_injector --> harness_guard",
+            ]
+        )
+
     def stream(self, state: AgentState, config: dict | None = None) -> Any:
         runtime_config = self._runtime_config(config)
         return self._graph.stream(state, config=runtime_config)
@@ -133,6 +160,7 @@ def build_graph(
 
 def visualize_graph() -> None:
     graph = build_graph()
+    print("ASCII graph:")
     try:
         graph.get_graph().print_ascii()
     except ImportError:
@@ -146,3 +174,7 @@ def visualize_graph() -> None:
             "  -> fail_node\n"
             "  -> END"
         )
+    print("\nMermaid graph:")
+    print("```mermaid")
+    print(graph.to_mermaid())
+    print("```")
