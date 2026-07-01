@@ -1,10 +1,10 @@
-# coding-agent-harness
+# Coding-Agent-Harness
 
-## Section 1 — What this project is
+## What this project is
 
 `coding-agent-harness` is a harness engineering framework built first around a LangGraph coding agent, then extended to prove the same harness can generalize beyond coding tasks by swapping in a CRAG executor. It uses Python, LangGraph, LangChain, LiteLLM/gpt-4o-mini, structlog, and pytest, and currently has 61 tests covering the core harness, production hardening, and RAG integration experiment. The project evolved through three main commits: `feat: coding-agent-harness — 5-layer harness engineering demo`, `feat(v2): P1 fixes — schema guard, real cost tracking, 3-state breaker, log query`, and `feat(v2): P2 upgrades — inferential verification, async HITL, reviewer subagent, mermaid export`.
 
-## Section 2 — What harness engineering is
+## What harness engineering is
 
 Harness engineering is the discipline of making an agent reliable by surrounding the model with deterministic control systems: state contracts, permission gates, loop guards, verifiers, observability, and recovery paths. In this framing, Agent = Model + Harness. Prompt engineering asks a model to comply probabilistically; harness engineering constrains what can happen deterministically.
 
@@ -12,7 +12,7 @@ ETCLOVG taxonomy: E covers environment and sandbox boundaries. T covers tool per
 
 In the stack, prompt engineering shapes model behavior, context engineering shapes what the model sees, harness engineering shapes what the system permits and records, and loop engineering shapes how the agent retries, routes, stops, and recovers.
 
-## Section 3 — Project evolution
+## Project evolution
 
 ### v1 — Foundation (25 tests)
 
@@ -54,7 +54,7 @@ Replaced the coding executor with a CRAG pipeline to test harness task-agnostici
 - Finding: `AgentState` needed zero new top-level fields; `task`, `output`, `verification`, `harness_events`, and `budget` were sufficient.
 - Two genuine gaps: token accounting is executor-coupled, and the circuit breaker has no RAG-equivalent trip signal.
 
-## Section 4 — Architecture
+## Architecture
 
 ```mermaid
 graph TD
@@ -79,7 +79,7 @@ graph TD
     feedback_injector --> harness_guard
 ```
 
-## Section 5 — Setup
+## Setup
 
 ```bash
 git clone https://github.com/RandomX707/Harness
@@ -91,7 +91,7 @@ cp .env.example .env
 
 All demos and tests work without API keys; the harness falls back to deterministic stubs automatically.
 
-## Section 6 — Running the demos
+## Running the demos
 
 ```bash
 # Clean PEV loop — harness runs to completion, no interventions
@@ -110,7 +110,7 @@ PYTHONPATH=src python3 src/main.py --rag
 PYTHONPATH=src python3 src/main.py --visualize
 ```
 
-## Section 7 — Running the tests
+## Running the tests
 
 ```bash
 PYTHONPATH=src python3 -m pytest tests/ -v
@@ -128,7 +128,7 @@ PYTHONPATH=src python3 -m pytest tests/ -v
 - `test_graph_export.py` covers Mermaid export.
 - `test_rag_graph.py` covers CRAG subgraph routing.
 
-## Section 8 — Key design decisions
+## Key design decisions
 
 The schema guard fires at the harness level instead of existing only as a type hint because type hints do not catch LangGraph silently dropping undeclared state keys at runtime. Runtime validation turns the state schema into an executable contract.
 
