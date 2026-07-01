@@ -88,14 +88,16 @@ def make_verify_node(verifier: Verifier | None = None) -> Executor:
         messages = state.get("messages", []) + [f"Verification attempt {attempts}: {passed}"]
         if not passed and attempts >= 3:
             messages.append("Stopped after repeated verification failures.")
+        next_verification = {
+            **verification,
+            "passed": passed,
+            "failures": failures,
+            "attempts": attempts,
+            "task_complete": True,
+        }
         return {
             **state,
-            "verification": {
-                "passed": passed,
-                "failures": failures,
-                "attempts": attempts,
-                "task_complete": True,
-            },
+            "verification": next_verification,
             "output": output if passed else "",
             "messages": messages,
         }

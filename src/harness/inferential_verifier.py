@@ -71,6 +71,49 @@ def judge_code_quality(
         )
 
 
+def judge_rag_answer(
+    question: str,
+    answer: str,
+    documents: list[dict],
+    model: str = "gpt-4o-mini",
+) -> InferentialVerificationResult:
+    """Judge whether a RAG answer is grounded in its retrieved documents."""
+
+    api_key = os.getenv("LITELLM_API_KEY")
+    if not api_key:
+        return InferentialVerificationResult(
+            score=1.0,
+            reasoning="rag inferential verification skipped: no API key",
+            flagged_issues=[],
+        )
+
+    context = "\n\n".join(
+        f"Source: {document.get('source', 'unknown')}\n{document.get('content', '')}"
+        for document in documents
+    )
+    system_prompt = (
+        "You are a RAG faithfulness judge. Decide whether the answer is grounded "
+        "in the provided documents and answers the question. Return ONLY JSON "
+        "with keys: score, reasoning, flagged_issues. score must be 0.0 to 1.0."
+    )
+    human_prompt = f"Question:\n{question}\n\nAnswer:\n{answer}\n\nDocuments:\n{context}"
+
+    try:
+        llm = ChatOpenAI(
+            model=model,
+            api_key=api_key,
+            base_url=os.getenv("LITELLM_BASE_URL"),
+        )
+        response = llm.invoke([SystemMessage(content=system_prompt), HumanMessage(content=human_prompt)])
+        return _parse_judge_response(_message_content(response))
+    except Exception as exc:
+        return InferentialVerificationResult(
+            score=0.5,
+            reasoning=f"rag inferential verification failed: {exc}",
+            flagged_issues=["could not parse judge response"],
+        )
+
+
 def _parse_judge_response(content: str) -> InferentialVerificationResult:
     try:
         parsed = json.loads(content)

@@ -19,6 +19,7 @@ from rich.console import Console
 from rich.table import Table
 
 from agent.graph import build_graph, initial_state, visualize_graph
+from agent.rag_executor import rag_executor, rag_verifier
 from agent.tools import write_file
 from harness.log_query import get_events
 from harness.observability import HarnessObserver, configure_logging
@@ -42,22 +43,35 @@ DEMO_TASKS = {
     ),
 }
 
+RAG_DEMO_TASKS = {
+    "default": "What is harness engineering?",
+}
+
 
 def run_task(
     task: str,
     model: str = "gpt-4o-mini",
     max_tokens: int = 4000,
     stream_output: bool = True,
+    rag_mode: bool = False,
 ) -> AgentState:
     load_dotenv()
     configure_logging()
 
     console = Console()
-    executor = _executor_for_task(task)
-    verifier = _verifier_for_task(task)
+    executor = rag_executor if rag_mode else _executor_for_task(task)
+    verifier = rag_verifier if rag_mode else _verifier_for_task(task)
     max_attempts = 10 if task == DEMO_TASKS["doom_loop_test"] else 3
     graph = build_graph(executor=executor, verifier=verifier)
     state = initial_state(task, max_attempts=max_attempts)
+    if rag_mode:
+        # RAG does not need the coding-specific fallback planner; preload a
+        # domain plan so the same harness_guard/execute/verify loop can run.
+        state["plan"] = [
+            "Retrieve candidate context documents.",
+            "Grade relevance and correct with stub search when needed.",
+            "Generate and verify a grounded answer.",
+        ]
     state["budget"] = {
         "tokens_used": 0,
         "tokens_max": max_tokens,
@@ -88,6 +102,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Run coding-agent harness demos.")
     parser.add_argument("--task", choices=sorted(DEMO_TASKS), help="Demo task to run.")
     parser.add_argument("--custom", help="Custom task text to run.")
+    parser.add_argument("--rag", action="store_true", help="Run the CRAG executor through the harness.")
     parser.add_argument("--model", default="gpt-4o-mini", help="Model name for LLM-backed runs.")
     parser.add_argument("--max-tokens", type=int, default=4000, help="Harness token budget.")
     parser.add_argument("--visualize", action="store_true", help="Print the LangGraph structure and exit.")
@@ -97,14 +112,16 @@ def main() -> None:
         visualize_graph()
         return
 
-    if args.custom:
+    if args.rag:
+        task = args.custom or RAG_DEMO_TASKS["default"]
+    elif args.custom:
         task = args.custom
     elif args.task:
         task = DEMO_TASKS[args.task]
     else:
-        parser.error("Provide --task, --custom, or --visualize.")
+        parser.error("Provide --task, --custom, --rag, or --visualize.")
 
-    run_task(task=task, model=args.model, max_tokens=args.max_tokens)
+    run_task(task=task, model=args.model, max_tokens=args.max_tokens, rag_mode=args.rag)
 
 
 def _executor_for_task(task: str):

@@ -7,6 +7,7 @@ from harness.state import AgentState
 from harness.pricing import calculate_cost
 from harness.inferential_verifier import InferentialVerificationResult
 from agent.graph import build_graph, initial_state
+from agent.rag_executor import rag_executor, rag_verifier
 from agent.tools import write_file
 
 
@@ -167,3 +168,22 @@ def test_inferential_verification_does_not_block_passing_task(monkeypatch: pytes
     assert result["verification"]["passed"] is True
     assert result["done"] is True
     assert result["verification"]["inferential"]["passed"] is False
+
+
+def test_rag_executor_completes_via_pev_loop(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("LITELLM_API_KEY", raising=False)
+    state = initial_state("What is harness engineering?")
+    state["plan"] = [
+        "Retrieve candidate context documents.",
+        "Grade relevance and correct with stub search when needed.",
+        "Generate and verify a grounded answer.",
+    ]
+
+    app = build_graph(executor=rag_executor, verifier=rag_verifier)
+    result = app.invoke(state)
+
+    assert result["done"] is True
+    assert result["verification"]["passed"] is True
+    assert "Stub RAG answer" in result["output"]
+    assert any(event.get("type") == "rag_execution" for event in result["harness_events"])
+    assert result["file_edits"] == {}
